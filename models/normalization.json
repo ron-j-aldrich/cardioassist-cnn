@@ -1,0 +1,17 @@
+{
+  "role": "echonet_dynamic_training_split",
+  "pixel_range": "0-255",
+  "mean": [
+    32.57874298095703,
+    32.7564811706543,
+    33.02537155151367
+  ],
+  "std": [
+    49.908653259277344,
+    49.92582321166992,
+    50.16936111450195
+  ],
+  "samples": 128,
+  "seed": 0,
+  "source": "echonet.utils.get_mean_and_std on Echo(split='train'), seed 0, 128 videos"
+}

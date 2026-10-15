@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+*.egg-info/
+.pytest_cache/
+dist/
+build/
+
+# Upstream checkout is cloned locally and pinned in the README.
+third_party/
+
+# Checkpoints and videos are too large, and the dataset must not be redistributed.
+models/*.pt
+videos/*
+!videos/.gitkeep
+data/
+*.avi
+*.mp4
+
+# Prediction tables repeat dataset labels and must not be committed.
+output/

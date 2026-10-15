@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cardioassist-cnn"
+version = "0.1.0"
+description = "Ejection-fraction inference with the official EchoNet-Dynamic R(2+1)D-18 checkpoint."
+requires-python = ">=3.11"
+dependencies = [
+    "torch==2.14.1",
+    "torchvision==0.29.1",
+    "numpy==2.4.6",
+    "opencv-python==5.0.0.93",
+]
+
+[project.scripts]
+cardioassist-ef = "cardioassist_cnn.inference:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,13 @@
+# Versions installed and imported on this MacBook Air M4, Python 3.11.14.
+# The upstream EchoNet-Dynamic requirements.txt pins torch==1.8.0. Those pins
+# target the authors' older environment and are not used on Apple Silicon.
+torch==2.14.1
+torchvision==0.29.1
+numpy==2.4.6
+pandas==3.0.6
+opencv-python==5.0.0.93
+scikit-image==0.26.0
+scikit-learn==1.9.1
+tqdm==4.70.1
+click==8.5.0
+matplotlib==3.11.2
