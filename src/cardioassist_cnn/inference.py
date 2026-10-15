@@ -89,6 +89,15 @@ class EFPredictor:
                 message=str(exc),
                 **common,
             )
+        return self.predict_decoded(decoded, video_path=video_path)
+
+    def predict_decoded(self, decoded: np.ndarray, video_path: str | Path | None = None) -> InferenceResult:
+        """Run one already decoded RGB video. The array is not read from disk again."""
+
+        common = {
+            "device": self.loaded.device.type,
+            "model_id": self.loaded.model_id,
+        }
         if self.mean is None or self.std is None:
             channels, frame_count, height, width = decoded.shape
             return InferenceResult(

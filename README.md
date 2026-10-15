@@ -15,6 +15,9 @@ A probe moving in Gazebo does not create an ultrasound image. This component rea
 | `models/normalization.json` | Training-split mean and standard deviation. Computed locally |
 | `data/EchoNet-Dynamic/` | Local dataset. Not committed |
 | `videos/` | Local videos. Empty. Not committed |
+| `src/cardioassist_cnn/degradation.py` | Corrupts one video from a 3-DOF pose. Neutral pose is unchanged |
+| `src/cardioassist_cnn/quality.py` | Predicts that pose severity. A view passes at or below 0.25 |
+| `tests/test_degradation.py` | Checks that pose mapping on a synthetic pattern |
 | `tests/test_synthetic_video_gate.py` | Decode, resize, and clip checks on a synthetic file. No EF percentage |
 | `tests/test_official_clip_match.py` | Compares one synthetic clip with the official loader. No EF percentage |
 | `.venv/` | Python 3.11 virtual environment. Not committed |
@@ -220,37 +223,59 @@ Training changes the weights using labeled videos. Validation is used to choose 
 
 A successful forward pass shows that the tensor flowed through the network. It does not show that the prediction is close to a cardiologist’s EF. That requires labeled videos and a fixed test split.
 
+## Simulated acquisition
+
+`degrade_video` is the Mac-side image step. A teammate’s probe does not render ultrasound. She sends a pose, three numbers `(tx, ty, angle)` in the range -1 to 1, and this function corrupts a prerecorded video.
+
+`(0, 0, 0)` returns the original frames. Any other pose applies foreshortening from `angle`, an off-axis shift from `tx` and `ty`, a black occlusion band from `tx`, then blur, speckle, and frame dropout. The same pose always produces the same frames. `severity_label` is the root-mean-square of the three components. It is the training target. It is not the model’s prediction, and it is not an ejection fraction.
+
+`SeverityNet` in `quality.py` is a separate network from the ejection-fraction model. It reads eight evenly spaced frames and predicts `severity_label`. A view is accepted when that prediction is at or below 0.25. The cutoff is a chosen operating point. It was not fit to ejection-fraction error.
+
+Training reads `TRAIN` videos and keeps the epoch with the lower mean absolute error on `VAL`. Each training pose is drawn from the range -1 to 1. Each validation file uses one pose that stays the same if the run is repeated. `TEST` is not read. The score measures agreement with the synthetic severity label, not cardiologist image quality, and not ejection fraction.
+
+```bash
+.venv/bin/python -m cardioassist_cnn.quality \
+  --data-dir data/EchoNet-Dynamic \
+  --normalization models/normalization.json \
+  --output models/severity_cnn.pt \
+  --device auto
+```
+
+That command was run for 2 epochs, batch size 16, seed 0, on MPS. It fit 7,460 `TRAIN` videos. Epoch 2 had the lower `VAL` error and was saved: mean absolute error 0.067 on 1,288 videos (epoch 1 was 0.109). The target is the synthetic severity, which runs from 0 to 1. An error of 0.067 can still change a pass/fail decision for a view near the 0.25 cutoff. `TEST` was not used. `models/severity_cnn.pt` stays on this Mac and is not committed.
+
+`POST /acquire` is the call the probe controller makes. The body is a file name already in the video directory and a pose. The reply contains `quality_score`, `passes`, and `threshold`. `ejection_fraction_percent` is filled in only when `passes` is true. The training label `severity_label` is not in the reply. A rejected view is still HTTP 200, so the controller can try another pose.
+
+```bash
+curl -s -X POST http://MAC_IP:8000/acquire \
+  -H 'Content-Type: application/json' \
+  -d '{"video": "0X100CF05D141FF143.avi", "pose": [0, 0, 0]}'
+```
+
+Point `--video-dir` at `data/EchoNet-Dynamic/Videos` when the source file is one of the local dataset videos. Those files stay on this Mac. The request sends the file name, not the video.
+
 ## Connection to the robotic probe simulation
 
-The simulation stays on the other computer. This Mac does not run ROS 2 or Gazebo. A Gazebo probe does not create an ultrasound image. The four parts of the demonstration stay separate:
-
-1. Simulated probe motion, on the robotics computer.
-2. A prerecorded apical four-chamber video, copied into `videos/` on this Mac.
-3. The CNN prediction, computed here from frame 0 of that file.
-4. The network call below, which is the only data connection between the machines.
-
-Inference stays on this Mac because the checkpoint and `models/normalization.json` are already here. The live call is one clip from frame 0, so it returns in about a second. The test-set figure to quote is still the beat average: MAE 4.054, RMSE 5.323, R² 0.809 on 1,275 videos. The percentage in the response is a research prediction, not a clinical measurement.
-
-On this Mac, after the demo video is in `videos/`:
+The simulation stays on the other computer. This Mac does not run ROS 2 or Gazebo. A moving probe does not create an ultrasound image. The controller sends a pose. This Mac degrades the named local video, scores severity, and calculates ejection fraction only when the view passes.
 
 ```bash
 .venv/bin/python -m cardioassist_cnn.serve \
-  --video-dir videos \
+  --video-dir data/EchoNet-Dynamic/Videos \
   --checkpoint models/r2plus1d_18_32_2_pretrained.pt \
+  --quality-checkpoint models/severity_cnn.pt \
   --normalization models/normalization.json \
   --device auto
 ```
 
-The process listens on port 8000. On the robotics computer, use this Mac’s address (`ipconfig getifaddr en0` on the Mac). Copy the video first, then request it by file name only. Names that leave `videos/` are rejected.
+The process listens on port 8000. On the robotics computer, use this Mac’s address (`ipconfig getifaddr en0` on the Mac). Names that leave the video directory are rejected.
 
 ```bash
 curl -s http://MAC_IP:8000/health
-curl -s -X POST http://MAC_IP:8000/predict \
+curl -s -X POST http://MAC_IP:8000/acquire \
   -H 'Content-Type: application/json' \
-  -d '{"video": "clip.avi"}'
+  -d '{"video": "0X100CF05D141FF143.avi", "pose": [0, 0, 0]}'
 ```
 
-A successful body contains `status`, `ejection_fraction_percent`, `forward_seconds`, `device`, `model_id`, and `message`. `ejection_fraction_percent` is present only when `status` is `ok`. ROS 2 still does not see this process by itself; the robotics node has to make this HTTP request when the simulated probe reaches the imaging pose.
+`POST /predict` still scores one unchanged file from frame 0 and does not apply a pose. The live ejection fraction, either way, is one frame-0 clip. The test-set figure to quote for the original videos is still the beat average: MAE 4.054, RMSE 5.323, R² 0.809 on 1,275 videos. A percentage after synthetic degradation is a different experiment, and it is a research prediction, not a clinical measurement. ROS 2 does not see this process by itself. The robotics controller has to make the HTTP request.
 
 ## Known limits
 
@@ -260,3 +285,4 @@ A successful body contains `status`, `ejection_fraction_percent`, `forward_secon
 - One clip starting at frame 0 is a different procedure from the beat average. The published MAE 4.1%, RMSE 5.3%, and R² 0.81 are the beat-averaged figures.
 - Lowercase `Split` values are uppercased in a temporary view. The pinned loader is unchanged. `np.int` in the trace-only lines is still unfixed; EF-only loading does not use those lines.
 - MPS and CPU both printed 61.54% for the one test clip above. That is one file, not a device-wide accuracy check.
+- The severity model’s saved `VAL` mean absolute error is 0.067 on 1,288 videos after 2 epochs. That is agreement with the synthetic pose label, not an ejection-fraction score, and `TEST` was not used.
